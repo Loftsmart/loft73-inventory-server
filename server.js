@@ -14,6 +14,16 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// LOGGING MIDDLEWARE - Per debug
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    if (req.method === 'POST' && req.body) {
+        console.log('Body:', JSON.stringify(req.body, null, 2));
+    }
+    next();
+});
+
 // Configurazione
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL || 'loft-73.myshopify.com';
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
@@ -62,6 +72,7 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
         }
         
         // Altrimenti fetch nuovi dati
+        console.log('Fetching fresh data from Back in Stock API...');
         let response;
         try {
             // Metodo 1: Bearer Token
@@ -73,8 +84,10 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
                 },
                 timeout: 30000
             });
+            console.log('Metodo 1 (Bearer) success');
         } catch (error) {
-            console.log('Metodo 1 fallito, provo metodo 2...');
+            console.log('Metodo 1 fallito:', error.message);
+            console.log('Provo metodo 2...');
             
             // Metodo 2: Token in URL
             const url = `https://${BACK_IN_STOCK_TOKEN}@app.backinstock.org/api/v1/variants.csv`;
@@ -85,6 +98,7 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
                 },
                 timeout: 30000
             });
+            console.log('Metodo 2 (URL token) success');
         }
         
         if (response.data) {
@@ -112,6 +126,7 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
         if (error.response) {
             console.error('Status:', error.response.status);
             console.error('Headers:', error.response.headers);
+            console.error('Data:', error.response.data);
         }
         
         res.status(error.response?.status || 500).json({
@@ -122,33 +137,50 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
     }
 });
 
-// Webhook endpoint per Back in Stock - SENZA VERIFICA FIRMA
-app.post('/api/webhook/back-in-stock', (req, res) => {
-    console.log('Webhook ricevuto da Back in Stock');
-    
-    try {
-        // Log del webhook payload
-        console.log('Webhook headers:', req.headers);
-        console.log('Webhook payload:', JSON.stringify(req.body, null, 2));
+// Webhook endpoint per Back in Stock - CON VARI PATH POSSIBILI
+// Prova diversi path che Back in Stock potrebbe usare
+const webhookPaths = [
+    '/api/webhook/back-in-stock',
+    '/api/webhooks/back-in-stock',
+    '/webhook/back-in-stock',
+    '/webhooks/back-in-stock',
+    '/api/webhook',
+    '/api/webhooks',
+    '/webhook',
+    '/webhooks'
+];
+
+// Registra l'handler per tutti i possibili path
+webhookPaths.forEach(path => {
+    app.post(path, (req, res) => {
+        console.log(`=== WEBHOOK RICEVUTO SU ${path} ===`);
+        console.log('Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('Body:', JSON.stringify(req.body, null, 2));
         
-        // Invalida cache quando arriva un nuovo webhook
-        if (req.body.topic === 'notification/created' || req.body.topic === 'notification/sent') {
-            console.log('Invalidating cache due to webhook');
-            backInStockCache = null;
-            cacheTimestamp = null;
+        try {
+            // Invalida cache quando arriva un nuovo webhook
+            if (req.body.topic === 'notification/created' || 
+                req.body.topic === 'notification/sent' ||
+                req.body.notification_id || 
+                req.body.product) {
+                console.log('Invalidating cache due to webhook');
+                backInStockCache = null;
+                cacheTimestamp = null;
+            }
+            
+            // Risposta 200 OK per confermare ricezione
+            res.status(200).json({ 
+                success: true, 
+                message: 'Webhook received successfully',
+                path: path,
+                timestamp: new Date().toISOString()
+            });
+            
+        } catch (error) {
+            console.error('Errore processando webhook:', error);
+            res.status(500).json({ error: 'Internal server error' });
         }
-        
-        // Risposta 200 OK per confermare ricezione
-        res.status(200).json({ 
-            success: true, 
-            message: 'Webhook received successfully',
-            timestamp: new Date().toISOString()
-        });
-        
-    } catch (error) {
-        console.error('Errore processando webhook:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
+    });
 });
 
 // Endpoint Shopify per disponibilità prodotti
@@ -293,12 +325,33 @@ app.post('/api/refresh-cache', (req, res) => {
     });
 });
 
+// Catch-all per richieste non gestite - DEVE ESSERE L'ULTIMO
+app.all('*', (req, res) => {
+    console.log('=== RICHIESTA NON GESTITA ===');
+    console.log('Method:', req.method);
+    console.log('Path:', req.path);
+    console.log('URL:', req.url);
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    
+    res.status(404).json({ 
+        error: 'Endpoint not found', 
+        path: req.path,
+        method: req.method,
+        message: 'Verifica che l\'URL del webhook sia corretto'
+    });
+});
+
 // Start server
 app.listen(PORT, () => {
-    console.log(`Server avviato sulla porta ${PORT}`);
-    console.log('Configurazione:');
+    console.log(`\n=== SERVER AVVIATO ===`);
+    console.log(`Porta: ${PORT}`);
+    console.log(`Timestamp: ${new Date().toISOString()}`);
+    console.log('\nConfigurazione:');
     console.log('- Shopify Store:', SHOPIFY_STORE_URL);
-    console.log('- Shopify Token:', SHOPIFY_ACCESS_TOKEN ? 'Configurato' : 'MANCANTE');
-    console.log('- Back in Stock Token:', BACK_IN_STOCK_TOKEN ? 'Configurato' : 'MANCANTE');
+    console.log('- Shopify Token:', SHOPIFY_ACCESS_TOKEN ? 'Configurato ✓' : 'MANCANTE ✗');
+    console.log('- Back in Stock Token:', BACK_IN_STOCK_TOKEN ? 'Configurato ✓' : 'MANCANTE ✗');
     console.log('- Cache Duration:', CACHE_DURATION / 1000, 'secondi');
+    console.log('\nWebhook endpoints registrati:');
+    webhookPaths.forEach(path => console.log(`  - POST ${path}`));
+    console.log('\n===================\n');
 });
