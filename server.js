@@ -4,7 +4,6 @@ const axios = require('axios');
 const csv = require('csv-parser');
 const { parse } = require('csv-parse/sync');
 const dotenv = require('dotenv');
-const crypto = require('crypto');
 
 dotenv.config();
 
@@ -14,7 +13,6 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-app.use(express.raw({ type: 'application/json' })); // Per webhook verification
 
 // Configurazione
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL || 'loft-73.myshopify.com';
@@ -124,27 +122,13 @@ app.get('/api/back-in-stock-requests', async (req, res) => {
     }
 });
 
-// Webhook endpoint per Back in Stock
+// Webhook endpoint per Back in Stock - SENZA VERIFICA FIRMA
 app.post('/api/webhook/back-in-stock', (req, res) => {
     console.log('Webhook ricevuto da Back in Stock');
     
     try {
-        // Verifica firma webhook (se implementata da Back in Stock)
-        const signature = req.headers['x-bis-signature'];
-        if (signature) {
-            // Verifica firma usando SHARED_SECRET
-            const expectedSignature = crypto
-                .createHmac('sha256', BACK_IN_STOCK_TOKEN)
-                .update(JSON.stringify(req.body))
-                .digest('hex');
-            
-            if (signature !== expectedSignature) {
-                console.error('Firma webhook non valida');
-                return res.status(401).json({ error: 'Unauthorized' });
-            }
-        }
-        
-        // Log del webhook
+        // Log del webhook payload
+        console.log('Webhook headers:', req.headers);
         console.log('Webhook payload:', JSON.stringify(req.body, null, 2));
         
         // Invalida cache quando arriva un nuovo webhook
@@ -157,7 +141,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
         // Risposta 200 OK per confermare ricezione
         res.status(200).json({ 
             success: true, 
-            message: 'Webhook received',
+            message: 'Webhook received successfully',
             timestamp: new Date().toISOString()
         });
         
