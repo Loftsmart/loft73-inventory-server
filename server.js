@@ -5,15 +5,19 @@ const dotenv = require('dotenv');
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
 // Configurazione
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL || 'loft-73.myshopify.com';
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+
 // IMPORTANTE: Array in memoria per salvare le richieste dal webhook
 let backInStockRequests = [];
 let lastWebhookReceived = null;
+
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ 
@@ -29,6 +33,7 @@ app.get('/api/health', (req, res) => {
         }
     });
 });
+
 // WEBHOOK ENDPOINT - Riceve le notifiche da Back in Stock
 app.post('/api/webhook/back-in-stock', (req, res) => {
     console.log('=== WEBHOOK RICEVUTO DA BACK IN STOCK ===');
@@ -82,8 +87,16 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
         // FIX PER ESTRARRE VARIANTI DAL NOME/SKU
         // ==========================================
         
-        // Lista completa dei colori possibili
+        // Lista completa dei colori possibili (singoli e doppi)
         const colorPatterns = [
+            // Colori doppi più comuni
+            'NERO/BIANCO', 'BIANCO/NERO', 'BLU/BIANCO', 'BIANCO/BLU',
+            'GRIGIO/NERO', 'NERO/GRIGIO', 'ROSSO/BIANCO', 'BIANCO/ROSSO',
+            'VERDE/BIANCO', 'BIANCO/VERDE', 'GIALLO/NERO', 'NERO/GIALLO',
+            'BEIGE/MARRONE', 'MARRONE/BEIGE', 'BLU/ROSSO', 'ROSSO/BLU',
+            'NERO/ROSSO', 'ROSSO/NERO', 'GRIGIO/BLU', 'BLU/GRIGIO',
+            'VERDE/NERO', 'NERO/VERDE', 'BIANCO/CIOCCOLATO', 'CIOCCOLATO/BIANCO',
+            // Colori singoli
             'TORTORA', 'NERO', 'BIANCO', 'GRIGIO', 'BLU', 'ROSSO', 'VERDE', 
             'BEIGE', 'MARRONE', 'GIALLO', 'ARANCIONE', 'VIOLA', 'ROSA',
             'CELESTE', 'NAVY', 'BORDEAUX', 'CAMMELLO', 'CIOCCOLATO', 'PANNA',
@@ -91,43 +104,14 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
             'CIPRIA', 'CORALLO', 'TURCHESE', 'PETROLIO', 'SENAPE', 'RUGGINE'
         ];
         
-        // Pattern per riconoscere colori doppi (es: NERO/BIANCO)
-        const doubleColorPattern = /\b(NERO|BIANCO|BLU|ROSSO|VERDE|GIALLO|GRIGIO|BEIGE|MARRONE|CIOCCOLATO|TORTORA|CELESTE|NAVY|BORDEAUX|CAMMELLO|PANNA|ANTRACITE|KAKI|MILITARE|SABBIA|TAUPE|FANGO|CIPRIA|CORALLO|TURCHESE|PETROLIO|SENAPE|RUGGINE)\s*\/\s*(NERO|BIANCO|BLU|ROSSO|VERDE|GIALLO|GRIGIO|BEIGE|MARRONE|CIOCCOLATO|TORTORA|CELESTE|NAVY|BORDEAUX|CAMMELLO|PANNA|ANTRACITE|KAKI|MILITARE|SABBIA|TAUPE|FANGO|CIPRIA|CORALLO|TURCHESE|PETROLIO|SENAPE|RUGGINE)\b/i;
-        
         // Se non ha variante, prova a estrarla dal nome prodotto o SKU
         if (!formattedRequest.variant_title || formattedRequest.variant_title === '') {
             console.log('Variante non trovata nel webhook, tento estrazione...');
             
             let variantFound = false;
             
-            // PRIMA PROVA: cerca colori doppi nel nome del prodotto
+            // PRIMA PROVA: cerca nel nome del prodotto (uppercase per match case-insensitive)
             if (formattedRequest.product_name) {
-                const productNameUpper = formattedRequest.product_name.toUpperCase();
-                const doubleColorMatch = productNameUpper.match(doubleColorPattern);
-                
-                if (doubleColorMatch) {
-                    formattedRequest.variant_title = doubleColorMatch[0];
-                    formattedRequest.option_2 = doubleColorMatch[0];
-                    variantFound = true;
-                    console.log(`Variante doppia trovata nel nome prodotto: ${doubleColorMatch[0]}`);
-                }
-            }
-            
-            // SECONDA PROVA: cerca colori doppi nello SKU
-            if (!variantFound && formattedRequest.sku) {
-                const skuUpper = formattedRequest.sku.toUpperCase();
-                const doubleColorMatch = skuUpper.match(doubleColorPattern);
-                
-                if (doubleColorMatch) {
-                    formattedRequest.variant_title = doubleColorMatch[0];
-                    formattedRequest.option_2 = doubleColorMatch[0];
-                    variantFound = true;
-                    console.log(`Variante doppia trovata nello SKU: ${doubleColorMatch[0]}`);
-                }
-            }
-            
-            // TERZA PROVA: cerca colori singoli nel nome del prodotto
-            if (!variantFound && formattedRequest.product_name) {
                 const productNameUpper = formattedRequest.product_name.toUpperCase();
                 
                 for (const color of colorPatterns) {
@@ -141,7 +125,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
                 }
             }
             
-            // QUARTA PROVA: cerca colori singoli nello SKU
+            // SECONDA PROVA: cerca nello SKU
             if (!variantFound && formattedRequest.sku) {
                 const skuUpper = formattedRequest.sku.toUpperCase();
                 
@@ -156,7 +140,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
                 }
             }
             
-            // QUINTA PROVA: estrai dal pattern comune "NOME - COLORE"
+            // TERZA PROVA: estrai dal pattern comune "NOME - COLORE"
             if (!variantFound && formattedRequest.product_name) {
                 const match = formattedRequest.product_name.match(/[-–]\s*([^-–]+)\s*$/);
                 if (match) {
@@ -205,9 +189,10 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
 // GET REQUESTS - Restituisce le richieste salvate dai webhook
 app.get('/api/back-in-stock-requests', (req, res) => {
-    const authToken = req.headers['x-auth-token'];    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
+    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
     console.log(`Restituendo ${backInStockRequests.length} richieste`);
     
     // Restituisci i dati nel formato che la dashboard si aspetta
@@ -220,6 +205,7 @@ app.get('/api/back-in-stock-requests', (req, res) => {
         count: backInStockRequests.length
     });
 });
+
 // CONTEGGIO RICHIESTE - Per badge notifiche
 app.get('/api/back-in-stock-requests/count', (req, res) => {
     res.json({
@@ -228,6 +214,7 @@ app.get('/api/back-in-stock-requests/count', (req, res) => {
         lastUpdate: lastWebhookReceived
     });
 });
+
 // CLEAR DATA - Solo per testing, rimuovi in produzione
 app.delete('/api/back-in-stock-requests/clear', (req, res) => {
     const previousCount = backInStockRequests.length;
@@ -241,6 +228,7 @@ app.delete('/api/back-in-stock-requests/clear', (req, res) => {
         timestamp: new Date().toISOString()
     });
 });
+
 // ENDPOINT SHOPIFY - Per sincronizzazione disponibilità prodotti
 app.post('/api/shopify/products-availability', async (req, res) => {
     try {
@@ -252,23 +240,34 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                 error: 'Lista prodotti mancante o invalida'
             });
         }
+        
         if (!SHOPIFY_ACCESS_TOKEN) {
             return res.status(500).json({
                 success: false,
                 error: 'Shopify Access Token non configurato'
             });
         }
+        
         console.log(`Ricerca disponibilità per ${products.length} prodotti...`);
+        
         // Crea mappa dei prodotti CSV per ricerca veloce
         const csvProductMap = new Map();
         products.forEach(p => {
             const key = p.name.toLowerCase().trim();
             csvProductMap.set(key, p);
+            
+            // IMPORTANTE: Aggiungi anche mapping per SKU
+            if (p.sku) {
+                const skuKey = p.sku.toLowerCase().trim();
+                csvProductMap.set(`sku:${skuKey}`, p);
+            }
         });
+        
         const results = [];
         const shopifyUrl = `https://${SHOPIFY_STORE_URL}/admin/api/2024-01/products.json`;
         let nextPageUrl = shopifyUrl;
         let totalProducts = 0;
+        
         // Pagina attraverso tutti i prodotti Shopify
         while (nextPageUrl) {
             try {
@@ -282,40 +281,85 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                         fields: 'id,title,variants,images'
                     } : undefined
                 });
+                
                 const shopifyProducts = response.data.products;
                 totalProducts += shopifyProducts.length;
+                
                 // Match prodotti
                 for (const shopifyProduct of shopifyProducts) {
                     const shopifyTitle = shopifyProduct.title.toLowerCase().trim();
+                    let matchedCsvProduct = null;
                     
-                    // Cerca match esatto o parziale
+                    // PRIMA: Cerca match esatto per nome
                     for (const [csvKey, csvProduct] of csvProductMap) {
-                        if (shopifyTitle.includes(csvKey) || csvKey.includes(shopifyTitle)) {
-                            let totalAvailable = 0;
-                            
-                            // Calcola disponibilità totale
-                            if (shopifyProduct.variants) {
-                                shopifyProduct.variants.forEach(variant => {
-                                    totalAvailable += variant.inventory_quantity || 0;
-                                });
-                            }
-                            results.push({
-                                csvProduct: csvProduct,
-                                shopifyProduct: {
-                                    id: shopifyProduct.id,
-                                    title: shopifyProduct.title,
-                                    variants: shopifyProduct.variants,
-                                    images: shopifyProduct.images
-                                },
-                                available: totalAvailable
-                            });
-                            
-                            // Rimuovi dalla mappa per evitare duplicati
-                            csvProductMap.delete(csvKey);
+                        if (csvKey.startsWith('sku:')) continue;
+                        
+                        if (shopifyTitle === csvKey || 
+                            shopifyTitle === `loft.73 - ${csvKey}` ||
+                            shopifyTitle === `loft73 - ${csvKey}`) {
+                            matchedCsvProduct = csvProduct;
                             break;
                         }
                     }
+                    
+                    // SECONDA: Se non trova per nome, cerca per SKU nelle varianti
+                    if (!matchedCsvProduct && shopifyProduct.variants) {
+                        for (const variant of shopifyProduct.variants) {
+                            if (variant.sku) {
+                                const variantSkuLower = variant.sku.toLowerCase().trim();
+                                
+                                // Cerca match SKU esatto o parziale
+                                for (const [csvKey, csvProduct] of csvProductMap) {
+                                    if (csvKey.startsWith('sku:')) {
+                                        const csvSku = csvKey.substring(4); // Rimuovi 'sku:' prefix
+                                        
+                                        // Match se lo SKU Shopify inizia con lo SKU CSV
+                                        if (variantSkuLower.startsWith(csvSku)) {
+                                            matchedCsvProduct = csvProduct;
+                                            console.log(`✅ Match SKU trovato: ${csvSku} -> ${variant.sku}`);
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (matchedCsvProduct) break;
+                            }
+                        }
+                    }
+                    
+                    // Se trovato un match, aggiungi ai risultati
+                    if (matchedCsvProduct) {
+                        let totalAvailable = 0;
+                        
+                        // Calcola disponibilità totale
+                        if (shopifyProduct.variants) {
+                            shopifyProduct.variants.forEach(variant => {
+                                totalAvailable += variant.inventory_quantity || 0;
+                            });
+                        }
+                        
+                        results.push({
+                            csvProduct: matchedCsvProduct,
+                            shopifyProduct: {
+                                id: shopifyProduct.id,
+                                title: shopifyProduct.title,
+                                variants: shopifyProduct.variants,
+                                images: shopifyProduct.images
+                            },
+                            available: totalAvailable
+                        });
+                        
+                        console.log(`✅ Prodotto matchato: ${matchedCsvProduct.name} -> ${shopifyProduct.title}`);
+                        
+                        // IMPORTANTE: Rimuovi il prodotto dalla mappa per evitare duplicati
+                        const keyToRemove = matchedCsvProduct.name.toLowerCase().trim();
+                        csvProductMap.delete(keyToRemove);
+                        if (matchedCsvProduct.sku) {
+                            csvProductMap.delete(`sku:${matchedCsvProduct.sku.toLowerCase().trim()}`);
+                        }
+                    }
                 }
+                
                 // Controlla se c'è una pagina successiva
                 const linkHeader = response.headers.link;
                 nextPageUrl = null;
@@ -331,13 +375,16 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                         }
                     }
                 }
+                
             } catch (error) {
                 console.error('Errore nel recupero prodotti Shopify:', error.message);
                 break;
             }
         }
+        
         console.log(`Analizzati ${totalProducts} prodotti Shopify`);
         console.log(`Trovati ${results.length} match`);
+        
         res.json({
             success: true,
             results: results,
@@ -349,6 +396,7 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                 matchRate: ((results.length / products.length) * 100).toFixed(2)
             }
         });
+        
     } catch (error) {
         console.error('Errore nella ricerca disponibilità:', error);
         res.status(500).json({
@@ -357,6 +405,7 @@ app.post('/api/shopify/products-availability', async (req, res) => {
         });
     }
 });
+
 // DATI DI TEST - Endpoint per inviare webhook di test
 app.post('/api/test/send-webhook', (req, res) => {
     const testData = {
@@ -388,6 +437,7 @@ app.post('/api/test/send-webhook', (req, res) => {
             res.status(500).json({ success: false, error: error.message });
         });
 });
+
 // Start server
 app.listen(PORT, () => {
     console.log(`\n🚀 Server avviato sulla porta ${PORT}`);
