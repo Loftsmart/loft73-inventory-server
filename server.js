@@ -74,7 +74,12 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
             option_2: webhookData.product?.option2 || '',
             
             // Prezzo (se disponibile)
-            unit_price: webhookData.product?.price || 0,
+            unit_price: webhookData.product?.price || 
+            webhookData.price || 
+            webhookData.variant?.price || 
+            webhookData.product?.variant_price ||
+            webhookData.product_price ||
+            0,
             
             // Dati originali completi per debug
             _original: webhookData
