@@ -1,8 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const csv = require('csv-parser');
-const { parse } = require('csv-parse/sync');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -17,12 +15,10 @@ app.use(express.json({ limit: '50mb' }));
 // Configurazione
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL || 'loft-73.myshopify.com';
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const BACK_IN_STOCK_TOKEN = process.env.BACK_IN_STOCK_TOKEN || '7ae5687e26fc02f7792bb75eb88f0e9e';
 
-// Cache per i dati Back in Stock
-let backInStockCache = null;
-let cacheTimestamp = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minuti
+// IMPORTANTE: Array in memoria per salvare le richieste dal webhook
+let backInStockRequests = [];
+let lastWebhookReceived = null;
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -30,127 +26,119 @@ app.get('/api/health', (req, res) => {
         status: 'ok', 
         timestamp: new Date().toISOString(),
         services: {
-            backInStock: !!BACK_IN_STOCK_TOKEN,
-            shopify: !!SHOPIFY_ACCESS_TOKEN
+            shopify: !!SHOPIFY_ACCESS_TOKEN,
+            webhook: true
         },
-        cache: {
-            hasData: !!backInStockCache,
-            lastUpdate: cacheTimestamp ? new Date(cacheTimestamp).toISOString() : null
+        data: {
+            totalRequests: backInStockRequests.length,
+            lastWebhook: lastWebhookReceived
         }
     });
 });
 
-// Endpoint per recuperare le richieste Back in Stock
-app.get('/api/back-in-stock-requests', async (req, res) => {
-    try {
-        console.log('Fetching Back in Stock requests...');
-        
-        // Controlla se forzare il refresh
-        const forceRefresh = req.query.refresh === 'true';
-        
-        // Usa cache se disponibile e non scaduta
-        if (!forceRefresh && backInStockCache && cacheTimestamp && 
-            (Date.now() - cacheTimestamp) < CACHE_DURATION) {
-            console.log('Returning cached data');
-            return res.json({
-                success: true,
-                data: backInStockCache,
-                format: 'csv',
-                timestamp: new Date(cacheTimestamp).toISOString(),
-                source: 'cache'
-            });
-        }
-        
-        // Altrimenti fetch nuovi dati
-        let response;
-        try {
-            // Metodo 1: Bearer Token
-            response = await axios.get('https://app.backinstock.org/api/v1/variants.csv', {
-                headers: {
-                    'Authorization': `Bearer ${BACK_IN_STOCK_TOKEN}`,
-                    'Accept': 'text/csv',
-                    'User-Agent': 'Loft73-Dashboard/1.0'
-                },
-                timeout: 30000
-            });
-        } catch (error) {
-            console.log('Metodo 1 fallito, provo metodo 2...');
-            
-            // Metodo 2: Token in URL
-            const url = `https://${BACK_IN_STOCK_TOKEN}@app.backinstock.org/api/v1/variants.csv`;
-            response = await axios.get(url, {
-                headers: {
-                    'Accept': 'text/csv',
-                    'User-Agent': 'Loft73-Dashboard/1.0'
-                },
-                timeout: 30000
-            });
-        }
-        
-        if (response.data) {
-            console.log('Dati ricevuti da Back in Stock, lunghezza:', response.data.length);
-            
-            // Aggiorna cache
-            backInStockCache = response.data;
-            cacheTimestamp = Date.now();
-            
-            // Invia il CSV
-            res.json({
-                success: true,
-                data: response.data,
-                format: 'csv',
-                timestamp: new Date().toISOString(),
-                source: 'back-in-stock-api'
-            });
-        } else {
-            throw new Error('Nessun dato ricevuto dall\'API');
-        }
-        
-    } catch (error) {
-        console.error('Errore nel recupero dati Back in Stock:', error.message);
-        
-        if (error.response) {
-            console.error('Status:', error.response.status);
-            console.error('Headers:', error.response.headers);
-        }
-        
-        res.status(error.response?.status || 500).json({
-            success: false,
-            error: error.message,
-            details: error.response?.data || 'Errore sconosciuto'
-        });
-    }
-});
-
-// Webhook endpoint per Back in Stock
+// WEBHOOK ENDPOINT - Riceve le notifiche da Back in Stock
 app.post('/api/webhook/back-in-stock', (req, res) => {
-    console.log('Webhook ricevuto da Back in Stock');
+    console.log('=== WEBHOOK RICEVUTO DA BACK IN STOCK ===');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Payload:', JSON.stringify(req.body, null, 2));
     
     try {
-        // Log del webhook
-        console.log('Webhook payload:', JSON.stringify(req.body, null, 2));
+        const webhookData = req.body;
+        lastWebhookReceived = new Date().toISOString();
         
-        // Invalida cache quando arriva un nuovo webhook
-        if (req.body.topic === 'notification/created' || req.body.topic === 'notification/sent') {
-            console.log('Invalidating cache due to webhook');
-            backInStockCache = null;
-            cacheTimestamp = null;
-        }
+        // Estrai i dati dal webhook e formattali per la dashboard
+        const formattedRequest = {
+            // Campi principali
+            notification_id: webhookData.notification_id || '',
+            sku: webhookData.product?.sku || '',
+            product_name: webhookData.product?.product_title || '',
+            description: webhookData.product?.product_title || '', // Alias per compatibilità
+            variant_id: webhookData.product?.variant_id || '',
+            variant_title: webhookData.product?.variant_title || '',
+            
+            // Dati cliente
+            email: webhookData.customer?.email || '',
+            customer_email: webhookData.customer?.email || '', // Alias
+            first_name: webhookData.customer?.first_name || '',
+            last_name: webhookData.customer?.last_name || '',
+            
+            // Quantità e date
+            requests: webhookData.quantity_required || 1,
+            quantity: webhookData.quantity_required || 1, // Alias
+            sent: 0, // Default non inviato
+            created_at: webhookData.created_at || new Date().toISOString(),
+            last_added: webhookData.created_at || new Date().toISOString(), // Alias
+            
+            // Opzioni prodotto (se disponibili)
+            option_1: webhookData.product?.option1 || '',
+            option_2: webhookData.product?.option2 || '',
+            
+            // Prezzo (se disponibile)
+            unit_price: webhookData.product?.price || 0,
+            
+            // Dati originali completi per debug
+            _original: webhookData
+        };
         
-        // Risposta 200 OK per confermare ricezione
+        // Aggiungi alla lista
+        backInStockRequests.unshift(formattedRequest); // Aggiungi all'inizio (più recenti prima)
+        
+        console.log(`✅ Richiesta salvata! Totale richieste: ${backInStockRequests.length}`);
+        
+        // Rispondi 200 OK per confermare ricezione
         res.status(200).json({ 
             success: true, 
-            message: 'Webhook received',
-            timestamp: new Date().toISOString()
+            message: 'Webhook received and processed',
+            timestamp: new Date().toISOString(),
+            totalRequests: backInStockRequests.length
         });
         
     } catch (error) {
-        console.error('Errore processando webhook:', error);
+        console.error('❌ Errore processando webhook:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Endpoint Shopify per disponibilità prodotti
+// GET REQUESTS - Restituisce le richieste salvate dai webhook
+app.get('/api/back-in-stock-requests', (req, res) => {
+    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
+    console.log(`Restituendo ${backInStockRequests.length} richieste`);
+    
+    // Restituisci i dati nel formato che la dashboard si aspetta
+    res.json({
+        success: true,
+        data: backInStockRequests,
+        format: 'json',
+        source: 'webhook-memory',
+        timestamp: new Date().toISOString(),
+        count: backInStockRequests.length
+    });
+});
+
+// CONTEGGIO RICHIESTE - Per badge notifiche
+app.get('/api/back-in-stock-requests/count', (req, res) => {
+    res.json({
+        success: true,
+        count: backInStockRequests.length,
+        lastUpdate: lastWebhookReceived
+    });
+});
+
+// CLEAR DATA - Solo per testing, rimuovi in produzione
+app.delete('/api/back-in-stock-requests/clear', (req, res) => {
+    const previousCount = backInStockRequests.length;
+    backInStockRequests = [];
+    
+    console.log(`🗑️ Cancellati ${previousCount} record`);
+    
+    res.json({
+        success: true,
+        message: `Cleared ${previousCount} requests`,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ENDPOINT SHOPIFY - Per sincronizzazione disponibilità prodotti
 app.post('/api/shopify/products-availability', async (req, res) => {
     try {
         const { products } = req.body;
@@ -280,12 +268,53 @@ app.post('/api/shopify/products-availability', async (req, res) => {
     }
 });
 
+// DATI DI TEST - Endpoint per inviare webhook di test
+app.post('/api/test/send-webhook', (req, res) => {
+    const testData = {
+        notification_id: Date.now(),
+        product: {
+            product_title: "Cappotto Wool Blend - Nero",
+            sku: "CWB2024-NERO-M",
+            variant_id: "12345",
+            variant_title: "M / Nero",
+            option1: "M",
+            option2: "Nero",
+            price: 289.00
+        },
+        customer: {
+            email: "test@example.com",
+            first_name: "Mario",
+            last_name: "Rossi"
+        },
+        quantity_required: 1,
+        created_at: new Date().toISOString()
+    };
+    
+    // Simula l'invio del webhook a se stesso
+    axios.post(`http://localhost:${PORT}/api/webhook/back-in-stock`, testData)
+        .then(() => {
+            res.json({ success: true, message: 'Test webhook sent', data: testData });
+        })
+        .catch(error => {
+            res.status(500).json({ success: false, error: error.message });
+        });
+});
+
 // Start server
 app.listen(PORT, () => {
-    console.log(`Server avviato sulla porta ${PORT}`);
-    console.log('Configurazione:');
-    console.log('- Shopify Store:', SHOPIFY_STORE_URL);
-    console.log('- Shopify Token:', SHOPIFY_ACCESS_TOKEN ? 'Configurato' : 'MANCANTE');
-    console.log('- Back in Stock Token:', BACK_IN_STOCK_TOKEN ? 'Configurato' : 'MANCANTE');
-    console.log('- Cache Duration:', CACHE_DURATION / 1000, 'secondi');
+    console.log(`\n🚀 Server avviato sulla porta ${PORT}`);
+    console.log('\n📋 Endpoints disponibili:');
+    console.log(`   POST   /api/webhook/back-in-stock     - Riceve webhook da Back in Stock`);
+    console.log(`   GET    /api/back-in-stock-requests    - Restituisce richieste salvate`);
+    console.log(`   GET    /api/back-in-stock-requests/count - Conta richieste`);
+    console.log(`   DELETE /api/back-in-stock-requests/clear - Pulisce dati (test)`);
+    console.log(`   POST   /api/shopify/products-availability - Sincronizza con Shopify`);
+    console.log(`   POST   /api/test/send-webhook         - Invia webhook di test`);
+    console.log(`   GET    /api/health                    - Health check`);
+    console.log('\n⚡ Sistema Webhook ATTIVO - I dati si accumulano automaticamente!');
+    console.log(`📊 Richieste in memoria: ${backInStockRequests.length}`);
+    
+    if (!SHOPIFY_ACCESS_TOKEN) {
+        console.log('\n⚠️  ATTENZIONE: Shopify Access Token non configurato!');
+    }
 });
