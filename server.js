@@ -181,7 +181,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
 
 // GET REQUESTS - Restituisce le richieste salvate dai webhook
 app.get('/api/back-in-stock-requests', (req, res) => {
-    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
+    const authToken = req.headers['x-auth-token'];    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
     console.log(`Restituendo ${backInStockRequests.length} richieste`);
     
     // Restituisci i dati nel formato che la dashboard si aspetta
