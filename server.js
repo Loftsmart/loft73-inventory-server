@@ -2,24 +2,18 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const dotenv = require('dotenv');
-
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 3001;
-
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
 // Configurazione
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL || 'loft-73.myshopify.com';
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-
 // IMPORTANTE: Array in memoria per salvare le richieste dal webhook
 let backInStockRequests = [];
 let lastWebhookReceived = null;
-
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ 
@@ -35,7 +29,6 @@ app.get('/api/health', (req, res) => {
         }
     });
 });
-
 // WEBHOOK ENDPOINT - Riceve le notifiche da Back in Stock
 app.post('/api/webhook/back-in-stock', (req, res) => {
     console.log('=== WEBHOOK RICEVUTO DA BACK IN STOCK ===');
@@ -98,14 +91,43 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
             'CIPRIA', 'CORALLO', 'TURCHESE', 'PETROLIO', 'SENAPE', 'RUGGINE'
         ];
         
+        // Pattern per riconoscere colori doppi (es: NERO/BIANCO)
+        const doubleColorPattern = /\b(NERO|BIANCO|BLU|ROSSO|VERDE|GIALLO|GRIGIO|BEIGE|MARRONE|CIOCCOLATO|TORTORA|CELESTE|NAVY|BORDEAUX|CAMMELLO|PANNA|ANTRACITE|KAKI|MILITARE|SABBIA|TAUPE|FANGO|CIPRIA|CORALLO|TURCHESE|PETROLIO|SENAPE|RUGGINE)\s*\/\s*(NERO|BIANCO|BLU|ROSSO|VERDE|GIALLO|GRIGIO|BEIGE|MARRONE|CIOCCOLATO|TORTORA|CELESTE|NAVY|BORDEAUX|CAMMELLO|PANNA|ANTRACITE|KAKI|MILITARE|SABBIA|TAUPE|FANGO|CIPRIA|CORALLO|TURCHESE|PETROLIO|SENAPE|RUGGINE)\b/i;
+        
         // Se non ha variante, prova a estrarla dal nome prodotto o SKU
         if (!formattedRequest.variant_title || formattedRequest.variant_title === '') {
             console.log('Variante non trovata nel webhook, tento estrazione...');
             
             let variantFound = false;
             
-            // Prima prova: cerca nel nome del prodotto
+            // PRIMA PROVA: cerca colori doppi nel nome del prodotto
             if (formattedRequest.product_name) {
+                const productNameUpper = formattedRequest.product_name.toUpperCase();
+                const doubleColorMatch = productNameUpper.match(doubleColorPattern);
+                
+                if (doubleColorMatch) {
+                    formattedRequest.variant_title = doubleColorMatch[0];
+                    formattedRequest.option_2 = doubleColorMatch[0];
+                    variantFound = true;
+                    console.log(`Variante doppia trovata nel nome prodotto: ${doubleColorMatch[0]}`);
+                }
+            }
+            
+            // SECONDA PROVA: cerca colori doppi nello SKU
+            if (!variantFound && formattedRequest.sku) {
+                const skuUpper = formattedRequest.sku.toUpperCase();
+                const doubleColorMatch = skuUpper.match(doubleColorPattern);
+                
+                if (doubleColorMatch) {
+                    formattedRequest.variant_title = doubleColorMatch[0];
+                    formattedRequest.option_2 = doubleColorMatch[0];
+                    variantFound = true;
+                    console.log(`Variante doppia trovata nello SKU: ${doubleColorMatch[0]}`);
+                }
+            }
+            
+            // TERZA PROVA: cerca colori singoli nel nome del prodotto
+            if (!variantFound && formattedRequest.product_name) {
                 const productNameUpper = formattedRequest.product_name.toUpperCase();
                 
                 for (const color of colorPatterns) {
@@ -119,7 +141,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
                 }
             }
             
-            // Seconda prova: cerca nello SKU
+            // QUARTA PROVA: cerca colori singoli nello SKU
             if (!variantFound && formattedRequest.sku) {
                 const skuUpper = formattedRequest.sku.toUpperCase();
                 
@@ -134,7 +156,7 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
                 }
             }
             
-            // Terza prova: estrai dal pattern comune "NOME - COLORE"
+            // QUINTA PROVA: estrai dal pattern comune "NOME - COLORE"
             if (!variantFound && formattedRequest.product_name) {
                 const match = formattedRequest.product_name.match(/[-–]\s*([^-–]+)\s*$/);
                 if (match) {
@@ -183,7 +205,6 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-
 // GET REQUESTS - Restituisce le richieste salvate dai webhook
 app.get('/api/back-in-stock-requests', (req, res) => {
     const authToken = req.headers['x-auth-token'];    console.log('=== RICHIESTA DATI BACK IN STOCK ===');
@@ -199,7 +220,6 @@ app.get('/api/back-in-stock-requests', (req, res) => {
         count: backInStockRequests.length
     });
 });
-
 // CONTEGGIO RICHIESTE - Per badge notifiche
 app.get('/api/back-in-stock-requests/count', (req, res) => {
     res.json({
@@ -208,7 +228,6 @@ app.get('/api/back-in-stock-requests/count', (req, res) => {
         lastUpdate: lastWebhookReceived
     });
 });
-
 // CLEAR DATA - Solo per testing, rimuovi in produzione
 app.delete('/api/back-in-stock-requests/clear', (req, res) => {
     const previousCount = backInStockRequests.length;
@@ -222,7 +241,6 @@ app.delete('/api/back-in-stock-requests/clear', (req, res) => {
         timestamp: new Date().toISOString()
     });
 });
-
 // ENDPOINT SHOPIFY - Per sincronizzazione disponibilità prodotti
 app.post('/api/shopify/products-availability', async (req, res) => {
     try {
@@ -234,28 +252,23 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                 error: 'Lista prodotti mancante o invalida'
             });
         }
-
         if (!SHOPIFY_ACCESS_TOKEN) {
             return res.status(500).json({
                 success: false,
                 error: 'Shopify Access Token non configurato'
             });
         }
-
         console.log(`Ricerca disponibilità per ${products.length} prodotti...`);
-
         // Crea mappa dei prodotti CSV per ricerca veloce
         const csvProductMap = new Map();
         products.forEach(p => {
             const key = p.name.toLowerCase().trim();
             csvProductMap.set(key, p);
         });
-
         const results = [];
         const shopifyUrl = `https://${SHOPIFY_STORE_URL}/admin/api/2024-01/products.json`;
         let nextPageUrl = shopifyUrl;
         let totalProducts = 0;
-
         // Pagina attraverso tutti i prodotti Shopify
         while (nextPageUrl) {
             try {
@@ -269,10 +282,8 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                         fields: 'id,title,variants,images'
                     } : undefined
                 });
-
                 const shopifyProducts = response.data.products;
                 totalProducts += shopifyProducts.length;
-
                 // Match prodotti
                 for (const shopifyProduct of shopifyProducts) {
                     const shopifyTitle = shopifyProduct.title.toLowerCase().trim();
@@ -288,7 +299,6 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                                     totalAvailable += variant.inventory_quantity || 0;
                                 });
                             }
-
                             results.push({
                                 csvProduct: csvProduct,
                                 shopifyProduct: {
@@ -306,7 +316,6 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                         }
                     }
                 }
-
                 // Controlla se c'è una pagina successiva
                 const linkHeader = response.headers.link;
                 nextPageUrl = null;
@@ -322,16 +331,13 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                         }
                     }
                 }
-
             } catch (error) {
                 console.error('Errore nel recupero prodotti Shopify:', error.message);
                 break;
             }
         }
-
         console.log(`Analizzati ${totalProducts} prodotti Shopify`);
         console.log(`Trovati ${results.length} match`);
-
         res.json({
             success: true,
             results: results,
@@ -343,7 +349,6 @@ app.post('/api/shopify/products-availability', async (req, res) => {
                 matchRate: ((results.length / products.length) * 100).toFixed(2)
             }
         });
-
     } catch (error) {
         console.error('Errore nella ricerca disponibilità:', error);
         res.status(500).json({
@@ -352,19 +357,18 @@ app.post('/api/shopify/products-availability', async (req, res) => {
         });
     }
 });
-
 // DATI DI TEST - Endpoint per inviare webhook di test
 app.post('/api/test/send-webhook', (req, res) => {
     const testData = {
         notification_id: Date.now(),
         product: {
-            product_title: "LOFT.73 - COMPLETO ARIELE - TORTORA",
-            sku: "ARIELE-P5D7311-TORTORA",
+            product_title: "LOFT.73 - ABITO LINO - NERO/BIANCO",
+            sku: "LINO-P5SIN22685-NERO-BIANCO",
             variant_id: "12345",
             variant_title: "", // Simuliamo il problema: variante vuota
             option1: "M",
             option2: "", // Anche questo vuoto
-            price: 289.00
+            price: 59.90
         },
         customer: {
             email: "test@example.com",
@@ -384,7 +388,6 @@ app.post('/api/test/send-webhook', (req, res) => {
             res.status(500).json({ success: false, error: error.message });
         });
 });
-
 // Start server
 app.listen(PORT, () => {
     console.log(`\n🚀 Server avviato sulla porta ${PORT}`);
