@@ -80,10 +80,90 @@ app.post('/api/webhook/back-in-stock', (req, res) => {
             _original: webhookData
         };
         
+        // ==========================================
+        // FIX PER ESTRARRE VARIANTI DAL NOME/SKU
+        // ==========================================
+        
+        // Lista completa dei colori possibili
+        const colorPatterns = [
+            'TORTORA', 'NERO', 'BIANCO', 'GRIGIO', 'BLU', 'ROSSO', 'VERDE', 
+            'BEIGE', 'MARRONE', 'GIALLO', 'ARANCIONE', 'VIOLA', 'ROSA',
+            'CELESTE', 'NAVY', 'BORDEAUX', 'CAMMELLO', 'CIOCCOLATO', 'PANNA',
+            'ANTRACITE', 'KAKI', 'MILITARE', 'SABBIA', 'TAUPE', 'FANGO',
+            'CIPRIA', 'CORALLO', 'TURCHESE', 'PETROLIO', 'SENAPE', 'RUGGINE'
+        ];
+        
+        // Se non ha variante, prova a estrarla dal nome prodotto o SKU
+        if (!formattedRequest.variant_title || formattedRequest.variant_title === '') {
+            console.log('Variante non trovata nel webhook, tento estrazione...');
+            
+            let variantFound = false;
+            
+            // Prima prova: cerca nel nome del prodotto
+            if (formattedRequest.product_name) {
+                const productNameUpper = formattedRequest.product_name.toUpperCase();
+                
+                for (const color of colorPatterns) {
+                    if (productNameUpper.includes(color)) {
+                        formattedRequest.variant_title = color;
+                        formattedRequest.option_2 = color;
+                        variantFound = true;
+                        console.log(`Variante trovata nel nome prodotto: ${color}`);
+                        break;
+                    }
+                }
+            }
+            
+            // Seconda prova: cerca nello SKU
+            if (!variantFound && formattedRequest.sku) {
+                const skuUpper = formattedRequest.sku.toUpperCase();
+                
+                for (const color of colorPatterns) {
+                    if (skuUpper.includes(color)) {
+                        formattedRequest.variant_title = color;
+                        formattedRequest.option_2 = color;
+                        variantFound = true;
+                        console.log(`Variante trovata nello SKU: ${color}`);
+                        break;
+                    }
+                }
+            }
+            
+            // Terza prova: estrai dal pattern comune "NOME - COLORE"
+            if (!variantFound && formattedRequest.product_name) {
+                const match = formattedRequest.product_name.match(/[-–]\s*([^-–]+)\s*$/);
+                if (match) {
+                    const potentialColor = match[1].trim();
+                    formattedRequest.variant_title = potentialColor;
+                    formattedRequest.option_2 = potentialColor;
+                    variantFound = true;
+                    console.log(`Variante estratta dal pattern: ${potentialColor}`);
+                }
+            }
+            
+            // Se ancora non trova nulla, usa Standard
+            if (!variantFound) {
+                formattedRequest.variant_title = 'Standard';
+                formattedRequest.option_2 = 'Standard';
+                console.log('Nessuna variante trovata, uso "Standard"');
+            }
+        }
+        
+        // Se option_2 è vuoto ma variant_title no, copia il valore
+        if (!formattedRequest.option_2 && formattedRequest.variant_title) {
+            formattedRequest.option_2 = formattedRequest.variant_title;
+        }
+        
+        // ==========================================
+        // FINE FIX VARIANTI
+        // ==========================================
+        
         // Aggiungi alla lista
         backInStockRequests.unshift(formattedRequest); // Aggiungi all'inizio (più recenti prima)
         
         console.log(`✅ Richiesta salvata! Totale richieste: ${backInStockRequests.length}`);
+        console.log(`   Prodotto: ${formattedRequest.product_name}`);
+        console.log(`   Variante: ${formattedRequest.variant_title}`);
         
         // Rispondi 200 OK per confermare ricezione
         res.status(200).json({ 
@@ -273,12 +353,12 @@ app.post('/api/test/send-webhook', (req, res) => {
     const testData = {
         notification_id: Date.now(),
         product: {
-            product_title: "Cappotto Wool Blend - Nero",
-            sku: "CWB2024-NERO-M",
+            product_title: "LOFT.73 - COMPLETO ARIELE - TORTORA",
+            sku: "ARIELE-P5D7311-TORTORA",
             variant_id: "12345",
-            variant_title: "M / Nero",
+            variant_title: "", // Simuliamo il problema: variante vuota
             option1: "M",
-            option2: "Nero",
+            option2: "", // Anche questo vuoto
             price: 289.00
         },
         customer: {
